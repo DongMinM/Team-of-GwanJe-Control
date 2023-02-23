@@ -13,19 +13,25 @@ const int servoMin = 0;
 const int servoMax = 180;
 const int servoDelay = 30;
 const int speed1 = 6;
-const int goal_height = 10;
+const int goal_height = 1;
 
 int header_pass = 0;
 int index = 0;
 uint8_t data;
 int32_t raw_imu[65];
 int sensorReady = 0;
-float ax, ay, az, a_total, wx, wy, wz, roll, pitch, yaw, height, pre_height, seconds, minutes, hours, tenMillis, currentMillis;
+float ax, ay, az, a_total, wx, wy, wz, roll, pitch, yaw, pre_height, seconds, minutes, hours, tenMillis, currentMillis;
+float height = 0.0;
+float pre_speed=0.0;
+float speeds = 0.0;
 int32_t raw_longitude, raw_latitude;
-float lon, lat, speeds;
+float lon, lat;
 byte tenMillis_b[sizeof(tenMillis)], seconds_b[sizeof(seconds)], minutes_b[sizeof(minutes)], hours_b[sizeof(hours)],ax_b[sizeof(ax)], ay_b[sizeof(ay)], az_b[sizeof(az)], wx_b[sizeof(wx)], wy_b[sizeof(wy)], wz_b[sizeof(wz)], roll_b[sizeof(roll)], pitch_b[sizeof(pitch)], yaw_b[sizeof(yaw)], height_b[sizeof(height)], lon_b[sizeof(lon)], lat_b[sizeof(lat)], speeds_b[sizeof(speeds)];
 int angle = 120;
 char header = 'A';
+float altitude_init = -66.2;
+int first_time = 1;
+float min_height = 4.0;
 
 SoftwareSerial imuSerial(Rx,Tx);
 Timer t;
@@ -47,7 +53,7 @@ void communication(){
   Wire.write(hours_b, sizeof(hours)); Wire.write(minutes_b, sizeof(minutes));
   Wire.endTransmission(); // End I2C transmission
   Wire.beginTransmission(SLAVE_ADDRESS);
-   Wire.write(seconds_b, sizeof(seconds));Wire.write(tenMillis_b, sizeof(tenMillis));
+  Wire.write(seconds_b, sizeof(seconds));Wire.write(tenMillis_b, sizeof(tenMillis));
 
   Wire.endTransmission();
 }
@@ -57,9 +63,12 @@ void rw_controller(){
 }
 
 void parachute_trigger(){
-  if (a_total < 1.5 and (height < pre_height or height > goal_height)){
+  if (a_total < 1.5 and first_time==0 and height>min_height and (height < pre_height or height > goal_height)){
+     if (height-pre_height<30){
      //Move servo from minimum angle to maximum angle
+     myservo.attach(9);
      myservo.write(angle);
+    }
     }
 }
 
@@ -69,14 +78,17 @@ void setup() {
   pinMode(In1, OUTPUT);
   pinMode(In2, OUTPUT);
   myservo.attach(9);
+  myservo.write(0);
+  delay(1000);
+  myservo.detach();
 
   Serial.begin(115200);
   Wire.begin(); // Initialize I2C bus
   imuSerial.begin(57600);
   
-  t.every(60, communication);
-  t.every(20, rw_controller);
-  t.every(100, parachute_trigger);
+  t.every(50, communication);
+//  t.every(40, rw_controller);
+  t.every(200, parachute_trigger);
   }
 
 
@@ -114,13 +126,34 @@ void get_alldata(){
     if(roll>180) roll=roll-360;
     if(pitch>180) pitch=pitch-360;
     if(yaw>180) yaw=yaw-360;
+
+    if (first_time==0){
+      pre_height = height;
+    }
+    height   = (raw_imu[42] << 24| raw_imu[41] << 16| raw_imu[40] << 8 | raw_imu[39])/100.0;
     
-    pre_height = height;
-    height   = (raw_imu[42] << 24| raw_imu[41] << 16| raw_imu[40] << 8 | raw_imu[39])/100;
+    if(first_time==1){
+      if (height!=0.0){
+      altitude_init = height;
+      first_time = 0;
+      Serial.println(altitude_init);
+      }
+    }
+    else{
+      height = height-altitude_init;
+    }
+    if(abs(height-pre_height)>50){
+      height=pre_height;
+    }
 
     raw_longitude = (raw_imu[49] << 24 | raw_imu[48] << 16 | raw_imu[47] << 8 | raw_imu[46]);
     raw_latitude  = (raw_imu[53] << 24 | raw_imu[52] << 16 | raw_imu[51] << 8 | raw_imu[50]);
+
+    pre_speed = speeds;
     speeds = (raw_imu[64] << 24 | raw_imu[63] << 16 | raw_imu[62] << 8 | raw_imu[61])/1000*3.6;
+    if (abs(speeds-pre_speed)>100){
+      speeds = pre_speed;
+    }
     
     lon = (raw_longitude/10000000) + double(raw_longitude%10000000)/6000000.0;
     lat  = (raw_latitude/10000000) + double(raw_latitude %10000000)/6000000.0;
